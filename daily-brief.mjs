@@ -2,6 +2,8 @@ import Parser from 'rss-parser';
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const GAMMA_API_KEY = process.env.GAMMA_API_KEY;
 if (!GAMMA_API_KEY) throw new Error('Missing GAMMA_API_KEY in OS environment variables');
@@ -10,6 +12,7 @@ const GAMMA_BASE = 'https://public-api.gamma.app/v1.0';
 const RSS_URL =
   'https://news.google.com/rss/search?q=%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%20%E5%9B%BD%E5%88%AB%20%E5%9C%B0%E5%8C%BA%20%E6%94%BF%E7%AD%96&hl=zh-CN&gl=CN&ceid=CN:zh-Hans';
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -97,6 +100,74 @@ function buildGammaInputText(items) {
   ].join('\n---\n');
 }
 
+async function buildHeroImageFromGamma({ pdfUrl, gammaUrl }) {
+  if (pdfUrl) {
+    const pdfBuffer = await fetchBinary(pdfUrl);
+    if (pdfBuffer) {
+      const pdfPath = join(__dirname, 'hero-source.pdf');
+      const heroPath = join(__dirname, 'hero-ai.jpg');
+      await writeFile(pdfPath, pdfBuffer);
+
+      // 优先 pdftoppm，其次 ImageMagick（magick/convert）
+      try {
+        await execFileAsync('pdftoppm', ['-f', '1', '-singlefile', '-jpeg', '-jpegopt', 'quality=90', pdfPath, join(__dirname, 'hero-ai')]);
+        return { imagePath: 'hero-ai.jpg', source: 'pdf-page-1' };
+      } catch (_) {
+        // ignore and fallback to imagemagick
+      }
+
+      try {
+        await execFileAsync('magick', ['-density', '180', `${pdfPath}[0]`, '-quality', '90', heroPath]);
+        return { imagePath: 'hero-ai.jpg', source: 'pdf-page-1' };
+      } catch (_) {
+        // ignore and try convert
+      }
+
+      try {
+        await execFileAsync('convert', ['-density', '180', `${pdfPath}[0]`, '-quality', '90', heroPath]);
+        return { imagePath: 'hero-ai.jpg', source: 'pdf-page-1' };
+      } catch (_) {
+        // continue to gamma og:image fallback
+      }
+    }
+  }
+
+  const ogImage = await fetchGammaOgImage(gammaUrl);
+  if (ogImage) {
+    console.log('ℹ️ 未使用本地 PDF 转图工具，改用 Gamma 页面 og:image 作为 Hero。');
+    return { imagePath: ogImage, source: 'gamma-og-image' };
+  }
+
+  console.log('⚠️ 无法从 PDF 或 Gamma 页面提取 Hero 图片，回退占位图。');
+  return { imagePath: null, source: 'fallback' };
+}
+
+async function fetchBinary(url) {
+  try {
+    const res = await fetch(url, { headers: { Accept: '*/*' } });
+    if (!res.ok) return null;
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchGammaOgImage(gammaUrl) {
+  if (!gammaUrl) return null;
+  try {
+    const res = await fetch(gammaUrl, { headers: { Accept: 'text/html' } });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const match =
+      html.match(/<meta[^>]+property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+    return match?.[1] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function gammaCreateWebpage({ inputText }) {
   // POST /generations :contentReference[oaicite:4]{index=4}
   const res = await fetch(`${GAMMA_BASE}/generations`, {
@@ -181,6 +252,11 @@ function buildPortalHtml({ gammaUrl, pdfUrl }) {
     ? `<div style="display:flex;gap:12px;"><a class="btn btn-primary" href="${gammaUrl}" target="_blank" rel="noopener noreferrer">浏览新闻列表</a><a class="btn btn-secondary" href="${pdfUrl}" target="_blank" rel="noopener noreferrer" download>导出为 PDF</a></div>`
     : `<div style="display:flex;gap:12px;"><a class="btn btn-primary" href="${gammaUrl}" target="_blank" rel="noopener noreferrer">浏览新闻列表</a><button class="btn btn-disabled" disabled>导出为 PDF（不可用）</button></div>`;
 
+  const heroSection =
+    `<div class="hero">` +
+    `<img src="hero.png" alt="根据头条新闻生成的AI封面图" onerror="this.parentElement.classList.add('hero-fallback');this.remove();" />` +
+    `</div>`;
+
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -198,7 +274,9 @@ function buildPortalHtml({ gammaUrl, pdfUrl }) {
     .btn-primary { background:var(--primary); }
     .btn-secondary { background:var(--secondary); }
     .btn-disabled { background:var(--muted); color:#fff; cursor:not-allowed; }
-    iframe { width:100%; height:78vh; border:0; background:#fff; }
+    .hero { margin:0 20px 20px; border-radius:14px; overflow:hidden; height:260px; background:#dbeafe; }
+    .hero img { width:100%; height:100%; object-fit:cover; display:block; }
+    .hero-fallback { display:flex; align-items:center; justify-content:center; color:#334155; background:linear-gradient(135deg,#dbeafe,#dcfce7); font-weight:600; }
   </style>
 </head>
 <body>
@@ -208,7 +286,7 @@ function buildPortalHtml({ gammaUrl, pdfUrl }) {
         <div class="title">AI 区域国别新闻简报</div>
         ${actionButtons}
       </div>
-      <iframe src="${gammaUrl}" title="Gamma News"></iframe>
+      ${heroSection}
     </div>
   </div>
 </body>
@@ -259,8 +337,18 @@ async function main() {
     console.log('\nℹ️ 未返回 PDF 下载链接，请检查 raw 字段（file_url / pdfUrl / fileUrl）。');
   }
 
+  console.log('🖼️ 正在从 Gamma 生成结果提取 Hero 图...');
+  const heroResult = await buildHeroImageFromGamma({ pdfUrl, gammaUrl: result.gammaUrl });
+  if (heroResult.source !== 'fallback') {
+    console.log(`✅ Hero 图片已生成（来源: ${heroResult.source}）`);
+  }
+
   const portalPath = join(__dirname, 'news-portal.html');
-  await writeFile(portalPath, buildPortalHtml({ gammaUrl: result.gammaUrl, pdfUrl }), 'utf8');
+  await writeFile(
+    portalPath,
+    buildPortalHtml({ gammaUrl: result.gammaUrl, pdfUrl }),
+    'utf8',
+  );
   console.log(`\n🌐 已生成本地门户网页: ${portalPath}`);
 }
 
