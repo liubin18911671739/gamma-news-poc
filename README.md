@@ -5,6 +5,7 @@
 ## 功能
 
 - 关键词驱动的主题简报生成（关键词同时影响抓取与生成）
+- 中文关键词自动翻译为英文后用于 RSS 搜索（智谱清言 API）
 - 支持临时添加多个 RSS 源（每行一个 URL）
 - 抓取 Google News RSS 新闻并与自定义 RSS 聚合去重
 - 调用 Gamma API 生成新闻简报页面
@@ -26,6 +27,7 @@ cp .env.example .env.local
 ```
 
 填写 `GAMMA_API_KEY`。
+如需开启“中文关键词翻译为英文后搜索”，再填写 `ZHIPUAI_API_KEY`。
 
 3. 启动开发环境
 
@@ -40,6 +42,9 @@ npm run dev
 1. 将仓库导入 Vercel
 2. 在 Vercel Project Settings -> Environment Variables 配置：
    - `GAMMA_API_KEY`（必填）
+   - `ZHIPUAI_API_KEY`（可选，用于中文关键词翻译）
+   - `ZHIPU_TRANSLATE_MODEL`（可选，默认 `glm-4-flash`）
+   - `ZHIPU_TRANSLATE_TIMEOUT_MS`（可选，默认 `5000`）
    - `RSS_URL`（可选）
 3. 使用默认构建设置：
    - Build Command: `npm run build`
@@ -54,11 +59,16 @@ npm run dev
     ```json
     {
       "limit": 12,
-      "keyword": "人工智能 国别 政策",
+      "keyword": "artificial intelligence geopolitics regional policy",
       "rssUrls": ["https://example.com/feed.xml", "https://another.com/rss"]
     }
     ```
   - 返回：`generationId`、抓取到的新闻列表、`requestConfig`、`warnings`
+  - `requestConfig` 关键字段：
+    - `keyword`：原始关键词
+    - `translatedKeyword`：翻译后的关键词
+    - `searchKeyword`：实际用于 RSS 搜索的关键词
+    - `translationApplied`：是否成功应用翻译
 
 - `GET /api/brief/status?generationId=...`
   - 返回：`status/progress/gammaUrl/pdfUrl/heroImageUrl`

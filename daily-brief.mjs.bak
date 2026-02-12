@@ -4,7 +4,7 @@ const GAMMA_API_KEY = process.env.GAMMA_API_KEY;
 if (!GAMMA_API_KEY) throw new Error('Missing GAMMA_API_KEY in OS environment variables');
 
 const GAMMA_BASE = 'https://public-api.gamma.app/v1.0';
-const RSS_URL = 'https://news.google.com/rss/search?q=artificial%20intelligence&hl=en-US&gl=US&ceid=US:en'; // 你可以换成行业RSS
+const RSS_URL = 'https://news.google.com/rss/search?q=artificial%20intelligence%20geopolitics%20regional%20policy&hl=en-US&gl=US&ceid=US:en'; // 你可以换成行业RSS
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

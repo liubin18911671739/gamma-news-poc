@@ -6,6 +6,7 @@ import {
   normalizeKeyword,
   normalizeLimit,
   normalizeRssUrls,
+  translateKeywordForSearch,
 } from "../_lib/brief";
 
 export const runtime = "nodejs";
@@ -16,14 +17,20 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const limit = normalizeLimit(body.limit);
     const keyword = normalizeKeyword(body.keyword);
+    const translation = await translateKeywordForSearch(keyword);
+    const searchKeyword = translation.searchKeyword;
     const rssInput = normalizeRssUrls(body.rssUrls);
     const fetchResult = await fetchHeadlines({
       limit,
-      keyword,
+      keyword: searchKeyword,
       rssUrls: rssInput.urls,
     });
     const { headlines } = fetchResult;
     const warnings = [...fetchResult.warnings];
+
+    if (translation.warning) {
+      warnings.unshift(translation.warning);
+    }
 
     if (rssInput.invalid.length) {
       warnings.push(`以下 RSS 地址格式错误，已忽略：${rssInput.invalid.join("，")}`);
@@ -37,6 +44,9 @@ export async function POST(request) {
           requestConfig: {
             limit,
             keyword,
+            translatedKeyword: translation.translatedKeyword,
+            searchKeyword: translation.searchKeyword,
+            translationApplied: translation.translationApplied,
             rssUrls: rssInput.urls,
             effectiveSources: fetchResult.effectiveSources,
           },
@@ -59,6 +69,9 @@ export async function POST(request) {
       requestConfig: {
         limit,
         keyword,
+        translatedKeyword: translation.translatedKeyword,
+        searchKeyword: translation.searchKeyword,
+        translationApplied: translation.translationApplied,
         rssUrls: fetchResult.rssUrls,
         effectiveSources: fetchResult.effectiveSources,
       },

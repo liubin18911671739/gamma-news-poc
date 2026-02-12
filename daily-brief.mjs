@@ -10,7 +10,7 @@ if (!GAMMA_API_KEY) throw new Error('Missing GAMMA_API_KEY in OS environment var
 
 const GAMMA_BASE = 'https://public-api.gamma.app/v1.0';
 const RSS_URL =
-  'https://news.google.com/rss/search?q=%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%20%E5%9B%BD%E5%88%AB%20%E5%9C%B0%E5%8C%BA%20%E6%94%BF%E7%AD%96&hl=zh-CN&gl=CN&ceid=CN:zh-Hans';
+  'https://news.google.com/rss/search?q=artificial%20intelligence%20geopolitics%20regional%20policy&hl=en-US&gl=US&ceid=US:en';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 

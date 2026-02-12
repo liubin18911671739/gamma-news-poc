@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 2500;
-const DEFAULT_KEYWORD = "人工智能 国别 政策";
+const DEFAULT_KEYWORD = "artificial intelligence geopolitics regional policy";
 
 const STATUS_LABELS = {
   idle: "待开始",
@@ -204,6 +204,30 @@ export default function Page() {
               <div className="status-item">
                 <span className="key">generationId</span>
                 <span className="value mono">{generationId}</span>
+              </div>
+            ) : null}
+            {requestConfig?.keyword ? (
+              <div className="status-item">
+                <span className="key">原关键词</span>
+                <span className="value">{requestConfig.keyword}</span>
+              </div>
+            ) : null}
+            {requestConfig?.searchKeyword ? (
+              <div className="status-item">
+                <span className="key">搜索关键词</span>
+                <span className="value">{requestConfig.searchKeyword}</span>
+              </div>
+            ) : null}
+            {requestConfig?.translatedKeyword ? (
+              <div className="status-item">
+                <span className="key">翻译关键词</span>
+                <span className="value">{requestConfig.translatedKeyword}</span>
+              </div>
+            ) : null}
+            {typeof requestConfig?.translationApplied === "boolean" ? (
+              <div className="status-item">
+                <span className="key">翻译生效</span>
+                <span className="value">{requestConfig.translationApplied ? "是" : "否"}</span>
               </div>
             ) : null}
             {requestConfig?.effectiveSources?.length ? (

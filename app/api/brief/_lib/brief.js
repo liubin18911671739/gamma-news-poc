@@ -1,9 +1,14 @@
 import Parser from "rss-parser";
+import { ZhipuAI } from "zhipuai-sdk-nodejs-v4";
 
 const GAMMA_BASE = "https://public-api.gamma.app/v1.0";
-const DEFAULT_KEYWORD = "人工智能 国别 政策";
-const DEFAULT_RSS_URL = "https://news.google.com/rss/search?q=artificial%20intelligence&hl=en-US&gl=US&ceid=US:en";
+const DEFAULT_KEYWORD = "artificial intelligence geopolitics regional policy";
+const DEFAULT_RSS_URL =
+  "https://news.google.com/rss/search?q=artificial%20intelligence%20geopolitics%20regional%20policy&hl=en-US&gl=US&ceid=US:en";
 const DEFAULT_LIMIT = 12;
+const DEFAULT_TRANSLATE_MODEL = "glm-4-flash";
+const DEFAULT_TRANSLATE_TIMEOUT_MS = 5000;
+const CHINESE_CHAR_REGEX = /[\u3400-\u9FFF]/;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -13,6 +18,16 @@ const getGammaApiKey = () => {
     throw new Error("Missing GAMMA_API_KEY environment variable");
   }
   return value;
+};
+
+const getZhipuApiKey = () => String(process.env.ZHIPUAI_API_KEY ?? "").trim();
+
+const getTranslateModel = () => String(process.env.ZHIPU_TRANSLATE_MODEL ?? "").trim() || DEFAULT_TRANSLATE_MODEL;
+
+const getTranslateTimeoutMs = () => {
+  const parsed = Number.parseInt(String(process.env.ZHIPU_TRANSLATE_TIMEOUT_MS ?? DEFAULT_TRANSLATE_TIMEOUT_MS), 10);
+  if (Number.isNaN(parsed)) return DEFAULT_TRANSLATE_TIMEOUT_MS;
+  return clamp(parsed, 1000, 20000);
 };
 
 const asErrorMessage = (err) => {
@@ -55,6 +70,105 @@ export function normalizeLimit(value) {
 export function normalizeKeyword(value) {
   const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
   return normalized || DEFAULT_KEYWORD;
+}
+
+export function containsChinese(text) {
+  return CHINESE_CHAR_REGEX.test(String(text ?? ""));
+}
+
+function sanitizeTranslatedKeyword(value) {
+  const text = String(value ?? "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  return text;
+}
+
+function toMessageText(content) {
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part?.type === "text" && typeof part?.text === "string") return part.text;
+        return "";
+      })
+      .join(" ")
+      .trim();
+  }
+  return String(content ?? "").trim();
+}
+
+export async function translateKeywordForSearch(keyword) {
+  const originalKeyword = normalizeKeyword(keyword);
+
+  if (!containsChinese(originalKeyword)) {
+    return {
+      originalKeyword,
+      translatedKeyword: originalKeyword,
+      searchKeyword: originalKeyword,
+      translationApplied: false,
+    };
+  }
+
+  const apiKey = getZhipuApiKey();
+  if (!apiKey) {
+    return {
+      originalKeyword,
+      translatedKeyword: originalKeyword,
+      searchKeyword: originalKeyword,
+      translationApplied: false,
+      warning: "检测到中文关键词，但未配置 ZHIPUAI_API_KEY，已回退为原关键词搜索。",
+    };
+  }
+
+  try {
+    const client = new ZhipuAI({
+      apiKey,
+      timeout: getTranslateTimeoutMs(),
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    });
+    const response = await client.createCompletions({
+      model: getTranslateModel(),
+      stream: false,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You translate Chinese search keywords into concise English search phrases. Return only the translated phrase, no explanations, no quotes.",
+        },
+        { role: "user", content: originalKeyword },
+      ],
+    });
+
+    const rawText = toMessageText(response?.choices?.[0]?.message?.content);
+    const translatedKeyword = sanitizeTranslatedKeyword(rawText);
+
+    if (!translatedKeyword) {
+      return {
+        originalKeyword,
+        translatedKeyword: originalKeyword,
+        searchKeyword: originalKeyword,
+        translationApplied: false,
+        warning: "关键词翻译结果为空，已回退为原关键词搜索。",
+      };
+    }
+
+    return {
+      originalKeyword,
+      translatedKeyword,
+      searchKeyword: translatedKeyword,
+      translationApplied: true,
+    };
+  } catch (error) {
+    return {
+      originalKeyword,
+      translatedKeyword: originalKeyword,
+      searchKeyword: originalKeyword,
+      translationApplied: false,
+      warning: `关键词翻译失败（${asErrorMessage(error)}），已回退为原关键词搜索。`,
+    };
+  }
 }
 
 export function normalizeRssUrls(value) {
