@@ -3,14 +3,27 @@
 import { useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 2500;
+const DEFAULT_KEYWORD = "人工智能 国别 政策";
+
+const STATUS_LABELS = {
+  idle: "待开始",
+  starting: "初始化任务",
+  processing: "Gamma 生成中",
+  completed: "已完成",
+  failed: "失败",
+};
 
 export default function Page() {
   const [limit, setLimit] = useState(12);
+  const [keyword, setKeyword] = useState(DEFAULT_KEYWORD);
+  const [rssInput, setRssInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("idle");
   const [progress, setProgress] = useState(0);
   const [generationId, setGenerationId] = useState("");
   const [headlines, setHeadlines] = useState([]);
+  const [warnings, setWarnings] = useState([]);
+  const [requestConfig, setRequestConfig] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const pollTimerRef = useRef(null);
@@ -51,19 +64,34 @@ export default function Page() {
     setError("");
     setResult(null);
     setHeadlines([]);
+    setWarnings([]);
+    setRequestConfig(null);
     setStatus("starting");
     setProgress(0);
+    setGenerationId("");
 
     try {
+      const rssUrls = rssInput
+        .split(/[\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
       const startRes = await fetch("/api/brief/start", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ limit: Number(limit) }),
+        body: JSON.stringify({
+          limit: Number(limit),
+          keyword,
+          rssUrls,
+        }),
       });
 
       const startPayload = await startRes.json();
+      setWarnings(startPayload.warnings || []);
+      setRequestConfig(startPayload.requestConfig || null);
+
       if (!startRes.ok) {
         throw new Error(startPayload.error || "创建生成任务失败");
       }
@@ -91,64 +119,139 @@ export default function Page() {
 
   const heroImageUrl = result?.heroImageUrl || "/hero.png";
   const isRunning = status === "starting" || status === "processing";
+  const statusText = STATUS_LABELS[status] || status;
+  const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
 
   return (
-    <main className="page">
-      <section className="hero">
-        <div className="hero-header">
-          <h1 className="title">AI 区域国别新闻简报</h1>
-          <p className="sub">
-            使用 Google News RSS 抓取头条，再通过 Gamma API 自动生成可分享的新闻简报页面。
-          </p>
+    <main className="page newsroom">
+      <section className="masthead card">
+        <div className="masthead-body">
+          <p className="eyebrow">GAMMA BRIEF WORKDESK</p>
+          <h1 className="title">AI 新闻简报工作台</h1>
+          <p className="sub">聚合多 RSS 源并根据主题关键词自动生成可分享的新闻简报页面。</p>
+          <div className="meta-row">
+            <span className="chip">{todayLabel}</span>
+            <span className="chip chip-topic">主题：{keyword || DEFAULT_KEYWORD}</span>
+          </div>
         </div>
-        <div className="controls">
-          <div className="row">
+      </section>
+
+      <section className="card composer">
+        <div className="section-head">
+          <h2>生成配置</h2>
+          <p>关键词会同时影响 RSS 抓取范围与 Gamma 内容生成策略。</p>
+        </div>
+
+        <div className="field-grid">
+          <label className="field">
+            <span>主题关键词</span>
             <input
               className="input"
+              type="text"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder={DEFAULT_KEYWORD}
+              disabled={isRunning}
+            />
+          </label>
+
+          <label className="field">
+            <span>抓取条数</span>
+            <input
+              className="input input-small"
               type="number"
               min={1}
               max={20}
               value={limit}
               onChange={(e) => setLimit(e.target.value)}
+              disabled={isRunning}
             />
-            <button className="button" type="button" onClick={onGenerate} disabled={loading || isRunning}>
-              {isRunning ? "生成中..." : "开始生成"}
-            </button>
-          </div>
+          </label>
+        </div>
 
-          {(isRunning || result) && (
-            <div className="status">
-              <div>任务状态：{status}</div>
-              {generationId ? <div>generationId：{generationId}</div> : null}
-              <div className="progress-track">
-                <div className="progress-bar" style={{ width: `${Math.max(1, progress)}%` }} />
-              </div>
-            </div>
-          )}
+        <label className="field">
+          <span>额外 RSS 源（每行一个 URL）</span>
+          <textarea
+            className="input textarea"
+            value={rssInput}
+            onChange={(e) => setRssInput(e.target.value)}
+            placeholder={"https://example.com/feed.xml\nhttps://another-site.com/rss"}
+            disabled={isRunning}
+            rows={4}
+          />
+        </label>
 
-          {error ? <div className="error">{error}</div> : null}
+        <div className="action-row">
+          <button className="button" type="button" onClick={onGenerate} disabled={loading || isRunning}>
+            {isRunning ? "生成中..." : "开始生成简报"}
+          </button>
+          <p className="hint">生成中会自动轮询状态，完成后可直接打开 Gamma 页面或下载 PDF。</p>
         </div>
       </section>
 
+      {(isRunning || result || error || warnings.length > 0 || requestConfig) && (
+        <section className="card status-panel">
+          <div className="section-head compact">
+            <h2>任务状态</h2>
+          </div>
+
+          <div className="status-grid">
+            <div className="status-item">
+              <span className="key">阶段</span>
+              <span className="value">{statusText}</span>
+            </div>
+            {generationId ? (
+              <div className="status-item">
+                <span className="key">generationId</span>
+                <span className="value mono">{generationId}</span>
+              </div>
+            ) : null}
+            {requestConfig?.effectiveSources?.length ? (
+              <div className="status-item">
+                <span className="key">生效 RSS 源</span>
+                <span className="value">{requestConfig.effectiveSources.length} 个</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="progress-track">
+            <div className="progress-bar" style={{ width: `${Math.max(1, progress)}%` }} />
+          </div>
+
+          {warnings.length > 0 ? (
+            <div className="warning-list">
+              {warnings.map((item) => (
+                <p key={item} className="warning-item">{item}</p>
+              ))}
+            </div>
+          ) : null}
+
+          {error ? <div className="error">{error}</div> : null}
+        </section>
+      )}
+
       {headlines.length > 0 ? (
-        <section className="panel">
-          <div className="content">
-            <h3>本次抓取到的新闻标题（前 {headlines.length} 条）</h3>
+        <section className="card panel">
+          <details open>
+            <summary>本次抓取新闻（{headlines.length} 条）</summary>
             <ol className="headline-list">
               {headlines.map((item) => (
-                <li key={`${item.link}-${item.title}`}>{item.title}</li>
+                <li key={`${item.link}-${item.title}`}>
+                  <span className="headline-title">{item.title}</span>
+                  {item.date ? <span className="headline-date">{item.date}</span> : null}
+                </li>
               ))}
             </ol>
-          </div>
+          </details>
         </section>
       ) : null}
 
       {result?.status === "completed" && result.gammaUrl ? (
-        <section className="panel">
+        <section className="card panel result-panel">
           <div className="preview">
             <img src={heroImageUrl} alt="简报封面图" />
           </div>
-          <div className="content">
+          <div className="result-content">
             <h3>简报已生成</h3>
             <div className="links">
               <a className="link-btn link-primary" href={result.gammaUrl} target="_blank" rel="noreferrer">
@@ -160,7 +263,7 @@ export default function Page() {
                 </a>
               ) : null}
             </div>
-            <p className="hint">PDF 链接通常有时效性，建议生成后尽快下载。</p>
+            <p className="hint">PDF 链接通常有时效性，建议在生成完成后尽快下载。</p>
           </div>
         </section>
       ) : null}

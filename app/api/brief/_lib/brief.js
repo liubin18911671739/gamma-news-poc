@@ -1,8 +1,8 @@
 import Parser from "rss-parser";
 
 const GAMMA_BASE = "https://public-api.gamma.app/v1.0";
-const DEFAULT_RSS_URL =
-  "https://news.google.com/rss/search?q=%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%20%E5%9B%BD%E5%88%AB%20%E5%9C%B0%E5%8C%BA%20%E6%94%BF%E7%AD%96&hl=zh-CN&gl=CN&ceid=CN:zh-Hans";
+const DEFAULT_KEYWORD = "人工智能 国别 政策";
+const DEFAULT_RSS_URL = "https://news.google.com/rss/search?q=artificial%20intelligence&hl=en-US&gl=US&ceid=US:en";
 const DEFAULT_LIMIT = 12;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -15,12 +15,76 @@ const getGammaApiKey = () => {
   return value;
 };
 
-const getRssUrl = () => process.env.RSS_URL || DEFAULT_RSS_URL;
+const asErrorMessage = (err) => {
+  const text = err?.message || String(err);
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+};
+
+const toTimestamp = (value) => {
+  const ts = Date.parse(value || "");
+  return Number.isNaN(ts) ? -1 : ts;
+};
+
+const toUnique = (values) => {
+  const seen = new Set();
+  const unique = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
+};
+
+const toGoogleNewsRssUrl = (keyword) => {
+  const params = new URLSearchParams({
+    q: keyword,
+    hl: "zh-CN",
+    gl: "CN",
+    ceid: "CN:zh-Hans",
+  });
+  return `https://news.google.com/rss/search?${params.toString()}`;
+};
 
 export function normalizeLimit(value) {
   const parsed = Number.parseInt(String(value ?? DEFAULT_LIMIT), 10);
   if (Number.isNaN(parsed)) return DEFAULT_LIMIT;
   return clamp(parsed, 1, 20);
+}
+
+export function normalizeKeyword(value) {
+  const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
+  return normalized || DEFAULT_KEYWORD;
+}
+
+export function normalizeRssUrls(value) {
+  const lines = Array.isArray(value)
+    ? value
+    : String(value ?? "")
+      .split(/[\n,]/)
+      .map((part) => part.trim());
+
+  const urls = [];
+  const invalid = [];
+  for (const line of lines) {
+    const text = String(line || "").trim();
+    if (!text) continue;
+    try {
+      const parsed = new URL(text);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        invalid.push(text);
+        continue;
+      }
+      urls.push(parsed.toString());
+    } catch {
+      invalid.push(text);
+    }
+  }
+
+  return {
+    urls: toUnique(urls),
+    invalid,
+  };
 }
 
 function extractImageUrl(item) {
@@ -66,20 +130,100 @@ function extractPdfUrl(payload) {
   );
 }
 
-export async function fetchHeadlines({ limit = DEFAULT_LIMIT } = {}) {
-  const parser = new Parser();
-  const feed = await parser.parseURL(getRssUrl());
-
-  return (feed.items || []).slice(0, limit).map((item) => ({
+async function fetchHeadlinesFromSource(parser, sourceUrl) {
+  const feed = await parser.parseURL(sourceUrl);
+  const items = (feed.items || []).map((item) => ({
     title: item.title?.trim() || "Untitled",
     link: item.link || "",
     source: feed.title || "RSS",
     date: item.isoDate || item.pubDate || "",
     imageUrl: extractImageUrl(item),
   }));
+  return { items };
 }
 
-export function buildGammaInputText(items) {
+function dedupeHeadlines(items) {
+  const linkSet = new Set();
+  const titleDateSet = new Set();
+  const deduped = [];
+
+  for (const item of items) {
+    const link = item.link?.trim();
+    if (link) {
+      if (linkSet.has(link)) continue;
+      linkSet.add(link);
+      deduped.push(item);
+      continue;
+    }
+
+    const key = `${item.title?.trim()?.toLowerCase() || ""}__${item.date || ""}`;
+    if (titleDateSet.has(key)) continue;
+    titleDateSet.add(key);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
+export async function fetchHeadlines({ limit = DEFAULT_LIMIT, keyword, rssUrls } = {}) {
+  const normalizedKeyword = normalizeKeyword(keyword);
+  const normalizedRss = normalizeRssUrls(rssUrls);
+  const warnings = [];
+
+  if (normalizedRss.invalid.length) {
+    warnings.push(`以下 RSS 地址无效，已忽略：${normalizedRss.invalid.join("，")}`);
+  }
+
+  let generatedGoogleRssUrl = null;
+  try {
+    generatedGoogleRssUrl = toGoogleNewsRssUrl(normalizedKeyword);
+  } catch {
+    generatedGoogleRssUrl = null;
+  }
+
+  const effectiveSources = toUnique([
+    generatedGoogleRssUrl,
+    ...normalizedRss.urls,
+  ]);
+
+  if (!effectiveSources.length) {
+    effectiveSources.push(process.env.RSS_URL || DEFAULT_RSS_URL);
+    warnings.push("未提供可用 RSS 源，已回退到默认 RSS。");
+  }
+
+  const parser = new Parser();
+  const tasks = effectiveSources.map((sourceUrl) =>
+    fetchHeadlinesFromSource(parser, sourceUrl).then(
+      (result) => ({ ok: true, sourceUrl, ...result }),
+      (error) => ({ ok: false, sourceUrl, error }),
+    ),
+  );
+
+  const settled = await Promise.all(tasks);
+  const allItems = [];
+  for (const item of settled) {
+    if (item.ok) {
+      allItems.push(...item.items);
+      continue;
+    }
+    warnings.push(`RSS 源抓取失败（${item.sourceUrl}）：${asErrorMessage(item.error)}`);
+  }
+
+  const headlines = dedupeHeadlines(allItems)
+    .sort((a, b) => toTimestamp(b.date) - toTimestamp(a.date))
+    .slice(0, normalizeLimit(limit));
+
+  return {
+    headlines,
+    warnings,
+    effectiveSources,
+    keyword: normalizedKeyword,
+    rssUrls: normalizedRss.urls,
+  };
+}
+
+export function buildGammaInputText(items, { keyword } = {}) {
+  const normalizedKeyword = normalizeKeyword(keyword);
   const today = new Date().toISOString().slice(0, 10);
   const cards = items.map((item, index) =>
     [
@@ -94,12 +238,17 @@ export function buildGammaInputText(items) {
       .join("\n"),
   );
 
-  return ["请严格使用简体中文输出所有标题与正文，不要使用英文段落。", `# Daily Industry Brief — ${today}`, "", ...cards].join(
-    "\n---\n",
-  );
+  return [
+    "请严格使用简体中文输出所有标题与正文，不要使用英文段落。",
+    `# Daily Industry Brief — ${today}`,
+    `本期主题关键词：${normalizedKeyword}`,
+    "",
+    ...cards,
+  ].join("\n---\n");
 }
 
-export async function gammaCreateWebpage({ inputText }) {
+export async function gammaCreateWebpage({ inputText, keyword }) {
+  const normalizedKeyword = normalizeKeyword(keyword);
   const res = await fetch(`${GAMMA_BASE}/generations`, {
     method: "POST",
     headers: {
@@ -123,7 +272,7 @@ export async function gammaCreateWebpage({ inputText }) {
         style: "editorial news illustration, clean modern, tech-focused, high contrast",
       },
       additionalInstructions:
-        "Output all content in Simplified Chinese. Create region/country-focused social cards in a clean news style with a 4:5 layout. Every single news card must include exactly one explanatory image. Use the provided image URL as the real image whenever available; if missing or invalid, generate one relevant AI image using flux-2-pro. Keep each card short and scannable.",
+        `Output all content in Simplified Chinese. Organize the brief around this topic keyword: ${normalizedKeyword}. Create region/country-focused social cards in a clean news style with a 4:5 layout. Every single news card must include exactly one explanatory image. Use the provided image URL as the real image whenever available; if missing or invalid, generate one relevant AI image using flux-2-pro. Keep each card short and scannable.`,
     }),
   });
 

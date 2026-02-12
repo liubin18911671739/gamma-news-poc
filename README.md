@@ -4,7 +4,9 @@
 
 ## 功能
 
-- 抓取 Google News RSS 新闻
+- 关键词驱动的主题简报生成（关键词同时影响抓取与生成）
+- 支持临时添加多个 RSS 源（每行一个 URL）
+- 抓取 Google News RSS 新闻并与自定义 RSS 聚合去重
 - 调用 Gamma API 生成新闻简报页面
 - 轮询任务状态并返回 `gammaUrl` / `pdfUrl`
 - 前端页面展示生成结果和封面图
@@ -48,8 +50,15 @@ npm run dev
 ## API
 
 - `POST /api/brief/start`
-  - Body: `{ "limit": 12 }`
-  - 返回：`generationId` 与抓取到的新闻列表
+  - Body:
+    ```json
+    {
+      "limit": 12,
+      "keyword": "人工智能 国别 政策",
+      "rssUrls": ["https://example.com/feed.xml", "https://another.com/rss"]
+    }
+    ```
+  - 返回：`generationId`、抓取到的新闻列表、`requestConfig`、`warnings`
 
 - `GET /api/brief/status?generationId=...`
   - 返回：`status/progress/gammaUrl/pdfUrl/heroImageUrl`
