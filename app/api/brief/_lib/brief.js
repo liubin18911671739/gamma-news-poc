@@ -39,9 +39,9 @@ const toUnique = (values) => {
 const toGoogleNewsRssUrl = (keyword) => {
   const params = new URLSearchParams({
     q: keyword,
-    hl: "zh-CN",
-    gl: "CN",
-    ceid: "CN:zh-Hans",
+    hl: "en-US",
+    gl: "US",
+    ceid: "US:en",
   });
   return `https://news.google.com/rss/search?${params.toString()}`;
 };
