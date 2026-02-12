@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   buildGammaInputText,
+  enrichHeadlines,
   fetchHeadlines,
   gammaCreateWebpage,
   normalizeKeyword,
@@ -25,7 +26,7 @@ export async function POST(request) {
       keyword: searchKeyword,
       rssUrls: rssInput.urls,
     });
-    const { headlines } = fetchResult;
+    let { headlines } = fetchResult;
     const warnings = [...fetchResult.warnings];
 
     if (translation.warning) {
@@ -49,11 +50,24 @@ export async function POST(request) {
             translationApplied: translation.translationApplied,
             rssUrls: rssInput.urls,
             effectiveSources: fetchResult.effectiveSources,
+            enrichmentApplied: false,
+            enrichedCount: 0,
+            enrichmentMode: "article_plus_related_rss",
+            enrichmentFactCountPerItem: 2,
           },
         },
         { status: 502 },
       );
     }
+
+    const enrichment = await enrichHeadlines(headlines, {
+      keyword: searchKeyword,
+      factCount: 2,
+      relatedLimit: 3,
+      concurrency: 3,
+    });
+    headlines = enrichment.items;
+    warnings.push(...enrichment.warnings);
 
     const inputText = buildGammaInputText(headlines, { keyword });
     const generationId = await gammaCreateWebpage({ inputText, keyword });
@@ -65,6 +79,8 @@ export async function POST(request) {
         title: item.title,
         link: item.link,
         date: item.date,
+        expandedFacts: item.expandedFacts || [],
+        enrichmentWarning: item.enrichmentWarning || null,
       })),
       requestConfig: {
         limit,
@@ -74,6 +90,10 @@ export async function POST(request) {
         translationApplied: translation.translationApplied,
         rssUrls: fetchResult.rssUrls,
         effectiveSources: fetchResult.effectiveSources,
+        enrichmentApplied: enrichment.enrichmentApplied,
+        enrichedCount: enrichment.enrichedCount,
+        enrichmentMode: enrichment.enrichmentMode,
+        enrichmentFactCountPerItem: enrichment.enrichmentFactCountPerItem,
       },
       warnings,
     });

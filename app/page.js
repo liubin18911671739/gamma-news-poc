@@ -230,6 +230,18 @@ export default function Page() {
                 <span className="value">{requestConfig.translationApplied ? "是" : "否"}</span>
               </div>
             ) : null}
+            {typeof requestConfig?.enrichmentApplied === "boolean" ? (
+              <div className="status-item">
+                <span className="key">联网扩展生效</span>
+                <span className="value">{requestConfig.enrichmentApplied ? "是" : "否"}</span>
+              </div>
+            ) : null}
+            {typeof requestConfig?.enrichedCount === "number" ? (
+              <div className="status-item">
+                <span className="key">扩展完成条数</span>
+                <span className="value">{requestConfig.enrichedCount}</span>
+              </div>
+            ) : null}
             {requestConfig?.effectiveSources?.length ? (
               <div className="status-item">
                 <span className="key">生效 RSS 源</span>
@@ -263,6 +275,31 @@ export default function Page() {
                 <li key={`${item.link}-${item.title}`}>
                   <span className="headline-title">{item.title}</span>
                   {item.date ? <span className="headline-date">{item.date}</span> : null}
+                  {Array.isArray(item.expandedFacts) && item.expandedFacts.length ? (
+                    <ul className="fact-list">
+                      {item.expandedFacts.map((factItem, idx) => (
+                        <li key={`${item.link || item.title}-fact-${idx}`}>
+                          <p className="fact-text">事实{idx + 1}：{factItem.fact}</p>
+                          <div className="fact-sources">
+                            {Array.isArray(factItem.sources)
+                              ? factItem.sources.map((source, sourceIdx) => (
+                                <a
+                                  key={`${source.url}-${sourceIdx}`}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="fact-source-link"
+                                >
+                                  来源{sourceIdx + 1}：{source.title}
+                                </a>
+                              ))
+                              : null}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {item.enrichmentWarning ? <p className="headline-warning">{item.enrichmentWarning}</p> : null}
                 </li>
               ))}
             </ol>
