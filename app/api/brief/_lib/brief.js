@@ -13,9 +13,10 @@ const DEFAULT_ENRICH_RELATED_LIMIT = 3;
 const DEFAULT_ENRICH_CONCURRENCY = 3;
 const DEFAULT_ENRICH_FETCH_TIMEOUT_MS = 4500;
 const DEFAULT_ENRICH_MODEL = "glm-4-flash";
-const DEFAULT_ENRICH_TIMEOUT_MS = 7000;
+const DEFAULT_ENRICH_TIMEOUT_MS = 15000;
 const ENRICHMENT_MODE = "article_plus_related_rss";
 const ENRICHMENT_SNIPPET_LIMIT = 1800;
+const ENRICHMENT_EVIDENCE_LIMIT = 2600;
 const CHINESE_CHAR_REGEX = /[\u3400-\u9FFF]/;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -73,6 +74,16 @@ const getEnrichTimeoutMs = () => {
 const asErrorMessage = (err) => {
   const text = err?.message || String(err);
   return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+};
+
+const isTimeoutError = (err) => {
+  const text = asErrorMessage(err).toLowerCase();
+  return (
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("exceeded") ||
+    err?.code === "ECONNABORTED"
+  );
 };
 
 const toTimestamp = (value) => {
@@ -482,32 +493,50 @@ export async function extractFactsWithZhipu({ item, evidence, factCount }) {
   });
 
   let parsed = null;
+  let lastError = null;
+  const evidenceText = String(evidence.evidenceText || "").slice(0, ENRICHMENT_EVIDENCE_LIMIT);
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await client.createCompletions({
-      model: getEnrichModel(),
-      stream: false,
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content:
-            "你是新闻研究助理。请严格输出 JSON，不要 markdown。格式为 {\"facts\":[{\"fact\":\"...\",\"sources\":[{\"title\":\"...\",\"url\":\"...\"}]}]}。仅可使用给定证据中的来源 URL，不可编造来源。",
-        },
-        {
-          role: "user",
-          content: `新闻标题：${item.title}\n新闻链接：${item.link || "N/A"}\n\n证据：\n${evidence.evidenceText}`,
-        },
-      ],
-    });
-    const rawText = toMessageText(response?.choices?.[0]?.message?.content);
-    const maybe = extractJsonObject(rawText);
-    if (maybe && Array.isArray(maybe.facts)) {
-      parsed = maybe;
-      break;
+    try {
+      const response = await client.createCompletions({
+        model: getEnrichModel(),
+        stream: false,
+        temperature: 0.1,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是新闻研究助理。请严格输出 JSON，不要 markdown。格式为 {\"facts\":[{\"fact\":\"...\",\"sources\":[{\"title\":\"...\",\"url\":\"...\"}]}]}。仅可使用给定证据中的来源 URL，不可编造来源。",
+          },
+          {
+            role: "user",
+            content: `新闻标题：${item.title}\n新闻链接：${item.link || "N/A"}\n\n证据：\n${evidenceText}`,
+          },
+        ],
+      });
+      const rawText = toMessageText(response?.choices?.[0]?.message?.content);
+      const maybe = extractJsonObject(rawText);
+      if (maybe && Array.isArray(maybe.facts)) {
+        parsed = maybe;
+        break;
+      }
+    } catch (error) {
+      lastError = error;
     }
   }
 
   if (!parsed || !Array.isArray(parsed.facts)) {
+    if (lastError) {
+      if (isTimeoutError(lastError)) {
+        return {
+          facts: [],
+          warning: `联网扩展请求超时（>${getEnrichTimeoutMs()}ms），已回退原始信息。可在环境变量中提高 ZHIPU_ENRICH_TIMEOUT_MS。`,
+        };
+      }
+      return {
+        facts: [],
+        warning: `联网扩展请求失败（${asErrorMessage(lastError)}），已回退原始信息。`,
+      };
+    }
     return {
       facts: [],
       warning: "联网扩展模型返回格式无效，已回退原始信息。",

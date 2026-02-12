@@ -52,7 +52,7 @@ npm run dev
    - `ENRICH_CONCURRENCY`（可选，默认 `3`）
    - `ENRICH_FETCH_TIMEOUT_MS`（可选，默认 `4500`）
    - `ZHIPU_ENRICH_MODEL`（可选，默认 `glm-4-flash`）
-   - `ZHIPU_ENRICH_TIMEOUT_MS`（可选，默认 `7000`）
+   - `ZHIPU_ENRICH_TIMEOUT_MS`（可选，默认 `15000`）
    - `RSS_URL`（可选）
 3. 使用默认构建设置：
    - Build Command: `npm run build`
