@@ -242,6 +242,33 @@ export default function Page() {
                 <span className="value">{requestConfig.enrichedCount}</span>
               </div>
             ) : null}
+            {typeof requestConfig?.coreSearchApplied === "boolean" ? (
+              <div className="status-item">
+                <span className="key">二次检索生效</span>
+                <span className="value">{requestConfig.coreSearchApplied ? "是" : "否"}</span>
+              </div>
+            ) : null}
+            {typeof requestConfig?.coreSearchPerItemLimit === "number" ? (
+              <div className="status-item">
+                <span className="key">每条二次检索数量</span>
+                <span className="value">{requestConfig.coreSearchPerItemLimit}</span>
+              </div>
+            ) : null}
+            {typeof requestConfig?.coreSearchAddedCount === "number" ? (
+              <div className="status-item">
+                <span className="key">二次检索新增条数</span>
+                <span className="value">{requestConfig.coreSearchAddedCount}</span>
+              </div>
+            ) : null}
+            {typeof requestConfig?.newsPoolSize === "number" ? (
+              <div className="status-item">
+                <span className="key">最终新闻池</span>
+                <span className="value">
+                  {requestConfig.newsPoolSize}
+                  {typeof requestConfig?.newsPoolMaxItems === "number" ? ` / ${requestConfig.newsPoolMaxItems}` : ""}
+                </span>
+              </div>
+            ) : null}
             {requestConfig?.effectiveSources?.length ? (
               <div className="status-item">
                 <span className="key">生效 RSS 源</span>
@@ -275,6 +302,7 @@ export default function Page() {
                 <li key={`${item.link}-${item.title}`}>
                   <span className="headline-title">{item.title}</span>
                   {item.date ? <span className="headline-date">{item.date}</span> : null}
+                  {item.articleSnippet ? <p className="headline-snippet">{item.articleSnippet}</p> : null}
                   {Array.isArray(item.expandedFacts) && item.expandedFacts.length ? (
                     <ul className="fact-list">
                       {item.expandedFacts.map((factItem, idx) => (

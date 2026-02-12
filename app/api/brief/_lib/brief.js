@@ -417,7 +417,9 @@ export async function fetchArticleSnippet(url, { timeoutMs = getEnrichFetchTimeo
   }
 }
 
-export async function searchRelatedNewsByRss({ title, keyword, limit = getEnrichRelatedLimit() } = {}) {
+export async function searchRelatedNewsByRss(
+  { title, keyword, limit = getEnrichRelatedLimit(), throwOnError = false } = {},
+) {
   const query = [String(title ?? "").trim(), String(keyword ?? "").trim()].filter(Boolean).join(" ");
   if (!query) return [];
 
@@ -440,7 +442,8 @@ export async function searchRelatedNewsByRss({ title, keyword, limit = getEnrich
         source: feed.title || "Google News RSS",
         date: item.isoDate || item.pubDate || "",
       }));
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return [];
   }
 }
@@ -624,6 +627,7 @@ async function fetchHeadlinesFromSource(parser, sourceUrl) {
     source: feed.title || "RSS",
     date: item.isoDate || item.pubDate || "",
     imageUrl: extractImageUrl(item),
+    articleSnippet: null,
     expandedFacts: [],
     enrichmentWarning: null,
   }));
@@ -810,6 +814,100 @@ export async function enrichHeadlines(items, { keyword, factCount, relatedLimit,
   };
 }
 
+export async function expandHeadlinesByCoreSearch(
+  items,
+  { keyword, perItemLimit, concurrency, maxItems } = {},
+) {
+  const inputItems = Array.isArray(items) ? items : [];
+  const normalizedKeyword = normalizeKeyword(keyword);
+  const resolvedPerItemLimit = clamp(Number(perItemLimit ?? getCoreSearchRelatedLimit()), 1, 6);
+  const resolvedConcurrency = clamp(Number(concurrency ?? getCoreSearchConcurrency()), 1, 8);
+  const resolvedMaxItems = clamp(Number(maxItems ?? getNewsPoolMaxItems()), 10, 120);
+
+  if (!inputItems.length) {
+    return {
+      items: [],
+      warnings: [],
+      coreSearchApplied: false,
+      coreSearchPerItemLimit: resolvedPerItemLimit,
+      coreSearchAddedCount: 0,
+      newsPoolSize: 0,
+      newsPoolMaxItems: resolvedMaxItems,
+    };
+  }
+
+  const searchResults = await runWithConcurrency(
+    inputItems,
+    resolvedConcurrency,
+    async (item) => {
+      const corePrompt = buildCorePrompt(item) || sanitizeFactText(item?.title);
+      if (!corePrompt) {
+        return {
+          itemTitle: item?.title || "Untitled",
+          related: [],
+          warning: "核心内容为空，已跳过二次检索。",
+        };
+      }
+
+      try {
+        const related = await searchRelatedNewsByRss({
+          title: corePrompt,
+          keyword: normalizedKeyword,
+          limit: resolvedPerItemLimit,
+          throwOnError: true,
+        });
+        return {
+          itemTitle: item?.title || "Untitled",
+          related,
+          warning: null,
+        };
+      } catch (error) {
+        return {
+          itemTitle: item?.title || "Untitled",
+          related: [],
+          warning: `二次检索失败（${asErrorMessage(error)}）。`,
+        };
+      }
+    },
+  );
+
+  const warnings = [];
+  const expandedItems = [];
+  for (const result of searchResults) {
+    if (result.warning) {
+      warnings.push(`二次检索：${result.itemTitle} -> ${result.warning}`);
+    }
+
+    for (const related of result.related || []) {
+      expandedItems.push({
+        title: related.title || "Untitled",
+        link: related.link || "",
+        source: related.source || "Google News RSS",
+        date: related.date || "",
+        imageUrl: null,
+        articleSnippet: null,
+        expandedFacts: [],
+        enrichmentWarning: null,
+      });
+    }
+  }
+
+  const baseItems = dedupeHeadlines(inputItems);
+  const merged = dedupeHeadlines([...baseItems, ...expandedItems]).sort((a, b) => toTimestamp(b.date) - toTimestamp(a.date));
+  const limitedItems = merged.slice(0, resolvedMaxItems);
+  const coreSearchAddedCount = Math.max(0, limitedItems.length - Math.min(baseItems.length, resolvedMaxItems));
+
+  return {
+    items: limitedItems,
+    warnings,
+    coreSearchApplied: coreSearchAddedCount > 0,
+    coreSearchPerItemLimit: resolvedPerItemLimit,
+    coreSearchAddedCount,
+    newsPoolSize: limitedItems.length,
+    newsPoolMaxItems: resolvedMaxItems,
+  };
+}
+
 export function buildGammaInputText(items, { keyword } = {}) {
   const normalizedKeyword = normalizeKeyword(keyword);
   const today = new Date().toISOString().slice(0, 10);
@@ -833,6 +931,7 @@ export function buildGammaInputText(items, { keyword } = {}) {
       item.date ? `*时间*: ${item.date}` : null,
       `*来源*: ${item.source}`,
       item.link ? `*链接*: ${item.link}` : null,
+      item.articleSnippet ? `*原文摘要*: ${item.articleSnippet}` : null,
       ...expansionLines,
       item.imageUrl ? `*配图URL*: ${item.imageUrl}` : "*配图URL*: 无（请改用AI生成）",
       "*配图要求*: 为本条新闻生成一幅说明性AI图片（信息图/新闻插画风格），用于解释新闻重点。",
@@ -843,7 +942,8 @@ export function buildGammaInputText(items, { keyword } = {}) {
 
   return [
     "请严格使用简体中文输出所有标题与正文，不要使用英文段落。",
-    "请优先基于每条新闻给定的扩展事实撰写具体内容，避免泛泛而谈。",
+    "请优先基于每条新闻给定的扩展事实与原文摘要撰写具体内容，避免泛泛而谈。",
+    "每条新闻需覆盖关键背景、事件主体与影响，不要过度压缩成一句话。",
     "不得编造来源链接或未给出的事实。",
     `# Daily Industry Brief — ${today}`,
     `本期主题关键词：${normalizedKeyword}`,
@@ -877,7 +977,7 @@ export async function gammaCreateWebpage({ inputText, keyword }) {
         style: "editorial news illustration, clean modern, tech-focused, high contrast",
       },
       additionalInstructions:
-        `Output all content in Simplified Chinese. Organize the brief around this topic keyword: ${normalizedKeyword}. Prioritize the provided expanded facts and source links for each news card, and avoid generic statements. Do not fabricate facts or sources beyond the provided inputs. Create region/country-focused social cards in a clean news style with a 4:5 layout. Every single news card must include exactly one explanatory image. Use the provided image URL as the real image whenever available; if missing or invalid, generate one relevant AI image using flux-2-pro. Keep each card short and scannable.`,
+        `Output all content in Simplified Chinese. Organize the brief around this topic keyword: ${normalizedKeyword}. Prioritize the provided expanded facts, article snippets, and source links for each news card. Do not fabricate facts or sources beyond the provided inputs. Keep each news card concrete and informative, preserving key context, actors, and impacts without excessive compression. Create region/country-focused social cards in a clean news style with a 4:5 layout. Every single news card must include exactly one explanatory image. Use the provided image URL as the real image whenever available; if missing or invalid, generate one relevant AI image using flux-2-pro.`,
     }),
   });
 

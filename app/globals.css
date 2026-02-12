@@ -348,6 +348,12 @@ details > summary::after {
   font-size: 12px;
 }
 
+.headline-snippet {
+  margin: 6px 0 0;
+  color: #435a77;
+  font-size: 13px;
+}
+
 .fact-list {
   margin: 8px 0 0;
   padding-left: 18px;

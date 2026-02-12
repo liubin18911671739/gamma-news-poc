@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   buildGammaInputText,
   enrichHeadlines,
+  expandHeadlinesByCoreSearch,
   fetchHeadlines,
   gammaCreateWebpage,
   normalizeKeyword,
@@ -54,6 +55,11 @@ export async function POST(request) {
             enrichedCount: 0,
             enrichmentMode: "article_plus_related_rss",
             enrichmentFactCountPerItem: 2,
+            coreSearchApplied: false,
+            coreSearchPerItemLimit: 3,
+            coreSearchAddedCount: 0,
+            newsPoolSize: 0,
+            newsPoolMaxItems: 60,
           },
         },
         { status: 502 },
@@ -69,6 +75,12 @@ export async function POST(request) {
     headlines = enrichment.items;
     warnings.push(...enrichment.warnings);
 
+    const expansion = await expandHeadlinesByCoreSearch(headlines, {
+      keyword: searchKeyword,
+    });
+    headlines = expansion.items;
+    warnings.push(...expansion.warnings);
+
     const inputText = buildGammaInputText(headlines, { keyword });
     const generationId = await gammaCreateWebpage({ inputText, keyword });
 
@@ -78,7 +90,9 @@ export async function POST(request) {
       headlines: headlines.map((item) => ({
         title: item.title,
         link: item.link,
+        source: item.source,
         date: item.date,
+        articleSnippet: item.articleSnippet || null,
         expandedFacts: item.expandedFacts || [],
         enrichmentWarning: item.enrichmentWarning || null,
       })),
@@ -94,6 +108,11 @@ export async function POST(request) {
         enrichedCount: enrichment.enrichedCount,
         enrichmentMode: enrichment.enrichmentMode,
         enrichmentFactCountPerItem: enrichment.enrichmentFactCountPerItem,
+        coreSearchApplied: expansion.coreSearchApplied,
+        coreSearchPerItemLimit: expansion.coreSearchPerItemLimit,
+        coreSearchAddedCount: expansion.coreSearchAddedCount,
+        newsPoolSize: expansion.newsPoolSize,
+        newsPoolMaxItems: expansion.newsPoolMaxItems,
       },
       warnings,
     });

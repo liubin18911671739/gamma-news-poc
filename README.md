@@ -7,6 +7,7 @@
 - 关键词驱动的主题简报生成（关键词同时影响抓取与生成）
 - 中文关键词自动翻译为英文后用于 RSS 搜索（智谱清言 API）
 - 每条新闻进行联网扩展（原文 + 相关新闻）并提炼事实级补充
+- 每条新闻核心内容二次检索最新 3 条相关新闻并扩充新闻池（默认上限 60）
 - 支持临时添加多个 RSS 源（每行一个 URL）
 - 抓取 Google News RSS 新闻并与自定义 RSS 聚合去重
 - 调用 Gamma API 生成新闻简报页面
@@ -53,6 +54,9 @@ npm run dev
    - `ENRICH_FETCH_TIMEOUT_MS`（可选，默认 `4500`）
    - `ZHIPU_ENRICH_MODEL`（可选，默认 `glm-4-flash`）
    - `ZHIPU_ENRICH_TIMEOUT_MS`（可选，默认 `15000`）
+   - `CORE_SEARCH_RELATED_LIMIT`（可选，默认 `3`）
+   - `CORE_SEARCH_CONCURRENCY`（可选，默认 `3`）
+   - `NEWS_POOL_MAX_ITEMS`（可选，默认 `60`）
    - `RSS_URL`（可选）
 3. 使用默认构建设置：
    - Build Command: `npm run build`
@@ -81,7 +85,13 @@ npm run dev
     - `enrichedCount`：完成扩展的新闻条数
     - `enrichmentMode`：扩展模式（`article_plus_related_rss`）
     - `enrichmentFactCountPerItem`：每条扩展事实数量
+    - `coreSearchApplied`：是否应用核心内容二次检索扩源
+    - `coreSearchPerItemLimit`：每条新闻二次检索条数
+    - `coreSearchAddedCount`：二次检索新增条数（去重后）
+    - `newsPoolSize`：最终新闻池条数
+    - `newsPoolMaxItems`：最终新闻池上限
   - `headlines` 每项新增：
+    - `articleSnippet`: 原文摘要（如有）
     - `expandedFacts`: `[{ fact, sources:[{ title, url }] }]`
     - `enrichmentWarning`: 扩展失败时的降级提示
 
