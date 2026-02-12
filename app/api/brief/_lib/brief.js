@@ -13,7 +13,8 @@ const DEFAULT_ENRICH_RELATED_LIMIT = 3;
 const DEFAULT_ENRICH_CONCURRENCY = 3;
 const DEFAULT_ENRICH_FETCH_TIMEOUT_MS = 4500;
 const DEFAULT_ENRICH_MODEL = "glm-4-flash";
-const DEFAULT_ENRICH_TIMEOUT_MS = 5000;
+const DEFAULT_ENRICH_TIMEOUT_MS = 15000;
+const MIN_ENRICH_TIMEOUT_MS = 5000;
 const DEFAULT_CORE_SEARCH_RELATED_LIMIT = 3;
 const DEFAULT_CORE_SEARCH_CONCURRENCY = 3;
 const DEFAULT_NEWS_POOL_MAX_ITEMS = 60;
@@ -72,7 +73,7 @@ const getEnrichModel = () => String(process.env.ZHIPU_ENRICH_MODEL ?? "").trim()
 const getEnrichTimeoutMs = () => {
   const parsed = Number.parseInt(String(process.env.ZHIPU_ENRICH_TIMEOUT_MS ?? DEFAULT_ENRICH_TIMEOUT_MS), 10);
   if (Number.isNaN(parsed)) return DEFAULT_ENRICH_TIMEOUT_MS;
-  return clamp(parsed, 1000, 30000);
+  return clamp(parsed, MIN_ENRICH_TIMEOUT_MS, 30000);
 };
 
 const getCoreSearchRelatedLimit = () => {
@@ -498,18 +499,75 @@ export async function buildEvidenceBundle(item, { keyword, relatedLimit, fetchTi
   };
 }
 
+function buildFallbackFactsFromEvidence({ item, evidence, factCount }) {
+  const resolvedFactCount = clamp(Number(factCount || 2), 1, 6);
+  const facts = [];
+  const sourceCandidates = Array.isArray(evidence?.sourceCandidates) ? evidence.sourceCandidates : [];
+  const primarySource = sourceCandidates.find((source) => source?.url);
+
+  const snippet = sanitizeFactText(evidence?.articleSnippet || "");
+  if (snippet && primarySource) {
+    facts.push({
+      fact: `原文要点：${snippet.slice(0, 220)}`,
+      sources: [
+        {
+          title: sanitizeFactText(primarySource.title) || sanitizeFactText(item?.title) || primarySource.url,
+          url: primarySource.url,
+        },
+      ],
+    });
+  } else if (sanitizeFactText(item?.title) && primarySource) {
+    facts.push({
+      fact: `核心事件：${sanitizeFactText(item.title)}`,
+      sources: [
+        {
+          title: sanitizeFactText(primarySource.title) || sanitizeFactText(item?.title) || primarySource.url,
+          url: primarySource.url,
+        },
+      ],
+    });
+  }
+
+  const seenRelated = new Set();
+  for (const related of evidence?.relatedNews || []) {
+    if (!related?.link || seenRelated.has(related.link)) continue;
+    seenRelated.add(related.link);
+    const relatedTitle = sanitizeFactText(related.title);
+    if (!relatedTitle) continue;
+
+    facts.push({
+      fact: `相关报道：${relatedTitle}`,
+      sources: [
+        {
+          title: relatedTitle,
+          url: related.link,
+        },
+      ],
+    });
+
+    if (facts.length >= resolvedFactCount) break;
+  }
+
+  return facts.slice(0, resolvedFactCount);
+}
+
 export async function extractFactsWithZhipu({ item, evidence, factCount }) {
   const apiKey = getZhipuApiKey();
+  const fallbackFacts = buildFallbackFactsFromEvidence({ item, evidence, factCount });
   if (!apiKey) {
     return {
-      facts: [],
-      warning: "未配置 ZHIPUAI_API_KEY，无法进行联网事实扩展。",
+      facts: fallbackFacts,
+      warning: fallbackFacts.length
+        ? "未配置 ZHIPUAI_API_KEY，已使用联网证据进行规则化扩展。"
+        : "未配置 ZHIPUAI_API_KEY，无法进行联网事实扩展。",
     };
   }
   if (!evidence?.evidenceText) {
     return {
-      facts: [],
-      warning: "未获取到足够证据，跳过联网扩展。",
+      facts: fallbackFacts,
+      warning: fallbackFacts.length
+        ? "模型证据不足，已使用可用链接进行规则化扩展。"
+        : "未获取到足够证据，跳过联网扩展。",
     };
   }
 
@@ -565,18 +623,24 @@ export async function extractFactsWithZhipu({ item, evidence, factCount }) {
     if (lastError) {
       if (isTimeoutError(lastError)) {
         return {
-          facts: [],
-          warning: `联网扩展请求超时（>${getEnrichTimeoutMs()}ms），已回退原始信息。可在环境变量中提高 ZHIPU_ENRICH_TIMEOUT_MS。`,
+          facts: fallbackFacts,
+          warning: fallbackFacts.length
+            ? `联网扩展请求超时（>${getEnrichTimeoutMs()}ms），已使用规则化扩展兜底。可在环境变量中提高 ZHIPU_ENRICH_TIMEOUT_MS。`
+            : `联网扩展请求超时（>${getEnrichTimeoutMs()}ms），已回退原始信息。可在环境变量中提高 ZHIPU_ENRICH_TIMEOUT_MS。`,
         };
       }
       return {
-        facts: [],
-        warning: `联网扩展请求失败（${asErrorMessage(lastError)}），已回退原始信息。`,
+        facts: fallbackFacts,
+        warning: fallbackFacts.length
+          ? `联网扩展请求失败（${asErrorMessage(lastError)}），已使用规则化扩展兜底。`
+          : `联网扩展请求失败（${asErrorMessage(lastError)}），已回退原始信息。`,
       };
     }
     return {
-      facts: [],
-      warning: "联网扩展模型返回格式无效，已回退原始信息。",
+      facts: fallbackFacts,
+      warning: fallbackFacts.length
+        ? "联网扩展模型返回格式无效，已使用规则化扩展兜底。"
+        : "联网扩展模型返回格式无效，已回退原始信息。",
     };
   }
 
@@ -613,9 +677,18 @@ export async function extractFactsWithZhipu({ item, evidence, factCount }) {
     });
   }
 
+  if (normalizedFacts.length) {
+    return {
+      facts: normalizedFacts.slice(0, factCount),
+      warning: null,
+    };
+  }
+
   return {
-    facts: normalizedFacts.slice(0, factCount),
-    warning: normalizedFacts.length ? null : "未提炼出可验证的扩展事实，已回退原始信息。",
+    facts: fallbackFacts,
+    warning: fallbackFacts.length
+      ? "模型未提炼出可验证事实，已使用规则化扩展兜底。"
+      : "未提炼出可验证的扩展事实，已回退原始信息。",
   };
 }
 
