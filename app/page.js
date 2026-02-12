@@ -126,8 +126,8 @@ export default function Page() {
     <main className="page newsroom">
       <section className="masthead card">
         <div className="masthead-body">
-          <p className="eyebrow">GAMMA BRIEF WORKDESK</p>
-          <h1 className="title">AI 新闻简报工作台</h1>
+          <p className="eyebrow">Global Insight & AI Decision Lab</p>
+          <h1 className="title">新闻简报工作台</h1>
           <p className="sub">聚合多 RSS 源并根据主题关键词自动生成可分享的新闻简报页面。</p>
           <div className="meta-row">
             <span className="chip">{todayLabel}</span>

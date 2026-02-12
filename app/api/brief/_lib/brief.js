@@ -14,9 +14,13 @@ const DEFAULT_ENRICH_CONCURRENCY = 3;
 const DEFAULT_ENRICH_FETCH_TIMEOUT_MS = 4500;
 const DEFAULT_ENRICH_MODEL = "glm-4-flash";
 const DEFAULT_ENRICH_TIMEOUT_MS = 15000;
+const DEFAULT_CORE_SEARCH_RELATED_LIMIT = 3;
+const DEFAULT_CORE_SEARCH_CONCURRENCY = 3;
+const DEFAULT_NEWS_POOL_MAX_ITEMS = 60;
 const ENRICHMENT_MODE = "article_plus_related_rss";
 const ENRICHMENT_SNIPPET_LIMIT = 1800;
 const ENRICHMENT_EVIDENCE_LIMIT = 2600;
+const CARD_SNIPPET_LIMIT = 500;
 const CHINESE_CHAR_REGEX = /[\u3400-\u9FFF]/;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -69,6 +73,24 @@ const getEnrichTimeoutMs = () => {
   const parsed = Number.parseInt(String(process.env.ZHIPU_ENRICH_TIMEOUT_MS ?? DEFAULT_ENRICH_TIMEOUT_MS), 10);
   if (Number.isNaN(parsed)) return DEFAULT_ENRICH_TIMEOUT_MS;
   return clamp(parsed, 1000, 30000);
+};
+
+const getCoreSearchRelatedLimit = () => {
+  const parsed = Number.parseInt(String(process.env.CORE_SEARCH_RELATED_LIMIT ?? DEFAULT_CORE_SEARCH_RELATED_LIMIT), 10);
+  if (Number.isNaN(parsed)) return DEFAULT_CORE_SEARCH_RELATED_LIMIT;
+  return clamp(parsed, 1, 6);
+};
+
+const getCoreSearchConcurrency = () => {
+  const parsed = Number.parseInt(String(process.env.CORE_SEARCH_CONCURRENCY ?? DEFAULT_CORE_SEARCH_CONCURRENCY), 10);
+  if (Number.isNaN(parsed)) return DEFAULT_CORE_SEARCH_CONCURRENCY;
+  return clamp(parsed, 1, 8);
+};
+
+const getNewsPoolMaxItems = () => {
+  const parsed = Number.parseInt(String(process.env.NEWS_POOL_MAX_ITEMS ?? DEFAULT_NEWS_POOL_MAX_ITEMS), 10);
+  if (Number.isNaN(parsed)) return DEFAULT_NEWS_POOL_MAX_ITEMS;
+  return clamp(parsed, 10, 120);
 };
 
 const asErrorMessage = (err) => {
@@ -196,6 +218,18 @@ async function runWithConcurrency(items, concurrency, worker) {
 
   await Promise.all(Array.from({ length: maxWorkers }, () => loop()));
   return results;
+}
+
+function buildCorePrompt(item) {
+  const facts = Array.isArray(item?.expandedFacts) ? item.expandedFacts : [];
+  const factText = facts
+    .slice(0, 2)
+    .map((fact) => sanitizeFactText(fact?.fact))
+    .filter(Boolean)
+    .join(" ; ");
+  const title = sanitizeFactText(item?.title);
+  const summary = sanitizeFactText(item?.articleSnippet || "").slice(0, 220);
+  return [title, factText, summary].filter(Boolean).join(" | ");
 }
 
 function toMessageText(content) {
@@ -686,6 +720,7 @@ async function enrichOneHeadline(item, config) {
     if (!evidence.evidenceText) {
       return {
         ...item,
+        articleSnippet: null,
         expandedFacts: [],
         enrichmentWarning: "未获取到足够的联网证据，已使用原始信息生成。",
       };
@@ -700,6 +735,7 @@ async function enrichOneHeadline(item, config) {
     if (!enriched.facts.length) {
       return {
         ...item,
+        articleSnippet: evidence.articleSnippet ? evidence.articleSnippet.slice(0, CARD_SNIPPET_LIMIT) : null,
         expandedFacts: [],
         enrichmentWarning: enriched.warning || "联网扩展失败，已使用原始信息生成。",
       };
@@ -707,12 +743,14 @@ async function enrichOneHeadline(item, config) {
 
     return {
       ...item,
+      articleSnippet: evidence.articleSnippet ? evidence.articleSnippet.slice(0, CARD_SNIPPET_LIMIT) : null,
       expandedFacts: enriched.facts,
       enrichmentWarning: enriched.warning || null,
     };
   } catch (error) {
     return {
       ...item,
+      articleSnippet: null,
       expandedFacts: [],
       enrichmentWarning: `联网扩展异常（${asErrorMessage(error)}），已使用原始信息生成。`,
     };
